@@ -14,34 +14,34 @@ class LanguageModelingEnv(gym.Env):
         self.last_state = None
         self.last_score = 0
 
-        self.BOS = bos 
-        self.EOS = eos 
+        self.BOS = bos
+        self.EOS = eos
 
     def step(self, action):
         next_state = torch.cat([self.last_state, action])
-        reward = self._reward(self.last_state, action) 
+        reward, predicted_ngrams = self._reward(self.last_state, action)
         self.last_state = next_state
-        return next_state, reward, (action == self.EOS).sum(), "" 
+        return next_state, reward, (action == self.EOS).sum(), predicted_ngrams
 
     def reset(self):
-        self.last_state = self.BOS 
+        self.last_state = self.BOS
         self.last_score = 0
         return self.BOS
 
     def _reward(self, state, action):
-       current_score = self._score_sentence(torch.cat([state, action]))
-       reward = current_score - self.last_score 
+       current_score, predicted_ngrams = self._score_sentence(torch.cat([state, action]))
+       reward = current_score - self.last_score
        self.last_score = current_score
-       return reward 
+       return reward, predicted_ngrams
 
     def _score_sentence(self, pred):
-        score = 0.0
+        score = -1.0
         # Init ngrams count for pred to 0.
         count_pred = defaultdict(int)
-
+        predicted_ngrams = []
         len_pred = len(pred)
         for i in range(len_pred):
-            for n in range(1, self.config.ngrams + 1):
+            for n in range(2, self.config.ngrams + 1):
                 if i - n + 1 < 0:
                     continue
 
@@ -50,12 +50,13 @@ class LanguageModelingEnv(gym.Env):
 
                 # Update n-gram count.
                 count_pred[ngram] += 1
-        
+
         for ngram, val in count_pred.iteritems():
-            if ngram in self.corpus_ngrams: 
-                # Penality for repitition. * Penality for predicting very common ngram.
-                score += (1/count_pred[ngram]) * (1/self.corpus_ngrams[ngram])  
-        return score
+            if ngram in self.corpus_ngrams:
+                score += (3**(len(ngram) - 1) ) # * self.corpus_ngrams[ngram]) / val
+                predicted_ngrams.append(ngram)
+
+        return score + (1 - float(len_pred - 1)/self.config.max_len), predicted_ngrams
 
 def _update_ngrams_count(train, ngrams, count):
     length = len(train)

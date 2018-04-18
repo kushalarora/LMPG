@@ -23,24 +23,31 @@ class LanguageBasePolicy(nn.Module):
 
         self.saved_log_probs = []
         self.rewards = []
+        self.entropies = []
 
     def init_weights(self):
-        initrange = 0.1 
+        initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder.bias.data.fill_(0)
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, state):
-	raise NotImplementedError()	
-    
+	raise NotImplementedError()
+
+    def init_hidden(self):
+	raise NotImplementedError()
+
     def clear(self):
-	raise NotImplementedError()	
+        self.init_hidden()
+        self.saved_log_probs = []
+        self.rewards = []
+        self.entropies = []
 
 class FeedForwardPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
         self.hidden = nn.Linear(self.config.context_size * self.config.embedding_size, self.config.hidden_size)
-	 
+
     def forward(self, state):
 	context = state[-self.config.context_size:]
         embeds = self.encoder(context).view((1, -1))
@@ -49,7 +56,7 @@ class FeedForwardPolicy(LanguageBasePolicy):
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
 
-    def clear(self):
+    def init_hidden(self):
         pass
 
 class RNNPolicy(LanguageBasePolicy):
@@ -57,7 +64,7 @@ class RNNPolicy(LanguageBasePolicy):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
         self.rnn = nn.RNNCell(self.config.embedding_size, self.config.hidden_size, nonlinearity=self.config.nonlinearity)
 	self.init_hidden()
-	
+
     def forward(self, state):
         embeds = self.encoder(state[-1]).view((1, -1))
         self.hidden = self.rnn(embeds, self.hidden)
@@ -68,25 +75,20 @@ class RNNPolicy(LanguageBasePolicy):
     def init_hidden(self):
         weight = next(self.parameters()).data
 	self.hidden = Variable(weight.new(self.config.hidden_size).zero_())
-	
-    def clear(self):
-	self.init_hidden()
+
 
 class LSTMPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
         self.lstm = nn.LSTMCell(self.config.embedding_size, self.config.hidden_size)
 	self.init_hidden()
-	
+
     def forward(self, state):
         embeds = self.encoder(state[-1]).view((1, -1))
         self.hidden = self.lstm(embeds, self.hidden)
         out = self.linear2(self.hidden[0])
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
-
-    def clear(self):
-	self.init_hidden()
 
     def init_hidden(self):
         weight = next(self.parameters()).data
