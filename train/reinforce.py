@@ -27,7 +27,8 @@ class Reinforce(BasePolicyGradient):
             rewards.insert(0, R)
 
         rewards = torch.Tensor(rewards)
-        # rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
+        if len(rewards) > 1:
+            rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
         for log_prob, entropy, reward in zip(self.saved_log_probs, self.entropies, rewards):
             policy_loss += -log_prob * reward -  0.0001 * entropy
 

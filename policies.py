@@ -14,7 +14,7 @@ class LanguageBasePolicy(nn.Module):
         self.decoder = nn.Linear(self.config.hidden_size, vocab_size)
 
         if self.config.tie_weights:
-            assert self.config.embedding_dim == self.config.hidden_size, \
+            assert self.config.embedding_size == self.config.hidden_size, \
                     "Hidden layer size ({}) != Embedding layer size ({})" \
                         .format(self.config.embedding_size, self.config.hidden_size)
             self.encoder.weight = self.decoder.weight
