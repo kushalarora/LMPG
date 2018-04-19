@@ -1,6 +1,8 @@
 import argparse
 import numpy as np
 import os
+import math
+import time
 
 from itertools import count
 
@@ -68,6 +70,27 @@ policy = RNNPolicy(args, vocab_size)
 
 optimizer = optim.Adam(policy.parameters(), lr=args.lr)
 
+criterion = nn.CrossEntropyLoss()
+def get_batch(source, i, evaluation=False):
+    seq_len = min(args.max_len, len(source) - 1 - i)
+    data = Variable(source[i:i+seq_len], volatile=evaluation)
+    target = Variable(source[i+1:i+1+seq_len].view(-1))
+    return data, target
+
+def evaluate(data_source):
+    # turn on evaluation mode which disables dropout.
+    policy.eval()
+    total_loss = 0
+    ntokens = len(corpus.dictionary)
+    for i in range(0, data_source.size(0) - 1, args.max_len):
+        data, targets = get_batch(data_source, i, evaluation=True)
+        log_probs = []
+        for j in range(1, len(data) + 1):
+            log_probs.append(policy(data[:j]).view(-1))
+        log_probs = torch.stack(log_probs).view(-1, ntokens)
+        total_loss += len(data) * criterion(log_probs, targets).data
+        policy.clear()
+    return total_loss[0] / len(data_source)
 
 def select_action(state):
     log_prob = policy(Variable(state)).view(-1)
@@ -92,7 +115,7 @@ def finish_episode():
     rewards = torch.Tensor(rewards)
     # rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
     for log_prob, entropy, reward in zip(policy.saved_log_probs, policy.entropies, rewards):
-        policy_loss += -log_prob * reward + 0.01 * entropy
+        policy_loss += -log_prob * reward + 0.0001 * entropy
     optimizer.zero_grad()
     policy_loss.backward()
 
@@ -100,6 +123,7 @@ def finish_episode():
     total_norm = torch.nn.utils.clip_grad_norm(policy.parameters(), args.clip)
     if np.isnan(total_norm):
         import pdb;pdb.set_trace()
+
     optimizer.step()
     del policy.rewards[:]
     del policy.saved_log_probs[:]
@@ -107,27 +131,43 @@ def finish_episode():
 
     return total_norm
 
-def main():
-    for epoch in range(args.epochs):
-        for episode in range(args.epi_per_epoch):
-            state = env.reset()
-            cuml_reward = 0.0
-            for i in range(args.max_len):
-                action = select_action(state)
-                state, reward, done, predicted_ngrams = env.step(action)
-                policy.rewards.append(reward)
-                cuml_reward += reward
+# Run on train data.
+valid_loss = evaluate(corpus.valid)
+print('=' * 89)
+print('| Before training | valid loss {:5.2f} | valid ppl {:8.2f}'.format(valid_loss, math.exp(valid_loss)))
+print('=' * 89)
 
-                if done:
-                    break
+for epoch in range(args.epochs):
+    epoch_start_time = time.time()
+    for episode in range(args.epi_per_epoch):
+        state = env.reset()
+        cuml_reward = 0.0
+        for i in range(args.max_len):
+            action = select_action(state)
+            state, reward, done, predicted_ngrams = env.step(action)
+            policy.rewards.append(reward)
+            cuml_reward += reward
 
-            total_norm = finish_episode()
+            if done:
+                break
 
-            print("Episode: %d | Sent len: %d | Sent Reward: %.3f | Norm: %.3f | ngrams: %s"
-                    % (episode, i, cuml_reward, total_norm,
-                        ', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
+        total_norm = finish_episode()
 
-            if False and (episode + 1) % args.log_interval == 0:
-                print ' '.join([corpus.dictionary.idx2word[j] for j in state])
-if __name__ == '__main__':
-    main()
+        print("| Episode: %d | Sent len: %d | Sent Reward: %.3f | Norm: %.3f | ngrams: %s "
+                % (episode, i, cuml_reward, total_norm,
+                    ', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
+
+        if False and (episode + 1) % args.log_interval == 0:
+            print ' '.join([corpus.dictionary.idx2word[j] for j in state])
+
+    val_loss = evaluate(corpus.valid)
+    print('-' * 89)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'
+                .format(epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss)))
+    print('-' * 89)
+
+# Run on test data.
+test_loss = evaluate(corpus.test, policy)
+print('=' * 89)
+print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(test_loss, math.exp(test_loss)))
+print('=' * 89)
