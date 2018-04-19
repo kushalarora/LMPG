@@ -21,10 +21,6 @@ class LanguageBasePolicy(nn.Module):
 
 	self.init_weights()
 
-        self.saved_log_probs = []
-        self.rewards = []
-        self.entropies = []
-
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
@@ -39,9 +35,6 @@ class LanguageBasePolicy(nn.Module):
 
     def clear(self):
         self.init_hidden()
-        self.saved_log_probs = []
-        self.rewards = []
-        self.entropies = []
 
 class FeedForwardPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):

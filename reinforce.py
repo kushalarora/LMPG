@@ -14,7 +14,7 @@ from torch.autograd import Variable
 from torch.distributions import Categorical
 from lm_env import LanguageModelingEnv
 from policies import FeedForwardPolicy, RNNPolicy
-
+from train.reinforce import Reinforce
 from data import Corpus
 
 parser = argparse.ArgumentParser(description='PyTorch REINFORCE example')
@@ -69,10 +69,11 @@ env = LanguageModelingEnv(args, corpus.train, bos=torch.LongTensor([0]), eos=tor
 env.seed(args.seed)
 torch.manual_seed(args.seed)
 
-
 policy = RNNPolicy(args, vocab_size)
 
 optimizer = optim.Adam(policy.parameters(), lr=args.lr)
+
+algo = Reinforce(args, policy, optimizer)
 
 criterion = nn.CrossEntropyLoss()
 def get_batch(source, i, evaluation=False):
@@ -96,45 +97,6 @@ def evaluate(data_source):
         policy.clear()
     return total_loss[0] / len(data_source)
 
-def select_action(state):
-    log_prob = policy(Variable(state)).view(-1)
-    probs = torch.exp(log_prob)
-    try:
-        m = Categorical(probs)
-        action = m.sample()
-        policy.saved_log_probs.append(log_prob[action])
-        policy.entropies.append(-1 * torch.dot(probs, log_prob))
-    except:
-        import pdb;pdb.set_trace()
-    return action.data
-
-
-def finish_episode():
-    R = 0
-    policy_loss = 0
-    rewards = []
-    for r in policy.rewards[::-1]:
-        R = r + args.gamma * R
-        rewards.insert(0, R)
-    rewards = torch.Tensor(rewards)
-    # rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
-    for log_prob, entropy, reward in zip(policy.saved_log_probs, policy.entropies, rewards):
-        policy_loss += -log_prob * reward + 0.0001 * entropy
-    optimizer.zero_grad()
-    policy_loss.backward()
-
-    # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-    total_norm = torch.nn.utils.clip_grad_norm(policy.parameters(), args.clip)
-    if np.isnan(total_norm):
-        import pdb;pdb.set_trace()
-
-    optimizer.step()
-    del policy.rewards[:]
-    del policy.saved_log_probs[:]
-    policy.clear()
-
-    return total_norm
-
 # Run on train data.
 valid_loss = evaluate(corpus.valid)
 print('=' * 89)
@@ -148,18 +110,18 @@ for epoch in range(args.epochs):
 	    state = env.reset()
 	    cuml_reward = 0.0
 	    for i in range(args.max_len):
-		action = select_action(state)
+		action = algo.select_action(state)
 		state, reward, done, predicted_ngrams = env.step(action)
-		policy.rewards.append(reward)
+		algo.rewards.append(reward)
 		cuml_reward += reward
 
 		if done:
 		    break
 
-	    total_norm = finish_episode()
+	    loss, total_norm = algo.finish_episode()
 
-	    print("| Episode: %d | Sent len: %d | Sent Reward: %.3f | Norm: %.3f | ngrams: %s "
-		    % (episode, i, cuml_reward, total_norm,
+	    print("| Episode: %d | Sent len: %d | Sent Reward: %.3f | Loss: %.3f | ngrams: %s "
+		    % (episode, i, cuml_reward, loss,
 			', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
 
 	    if (episode + 1) % args.log_interval == 0:
