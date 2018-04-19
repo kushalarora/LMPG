@@ -41,7 +41,7 @@ class LanguageModelingEnv(gym.Env):
         predicted_ngrams = []
         len_pred = len(pred)
         for i in range(len_pred):
-            for n in range(2, self.config.ngrams + 1):
+            for n in range(1, self.config.ngrams + 1):
                 if i - n + 1 < 0:
                     continue
 
@@ -53,9 +53,11 @@ class LanguageModelingEnv(gym.Env):
 
         for ngram, val in count_pred.iteritems():
             if ngram in self.corpus_ngrams:
-                score += (3**(len(ngram) - 1) ) # * self.corpus_ngrams[ngram]) / val
-                predicted_ngrams.append(ngram)
+                score += (3**(len(ngram) - 1) - 1)
+                if len(ngram) > 1:
+                    predicted_ngrams.append(ngram)
 
+            score -= val - 1
         return score + (1 - float(len_pred - 1)/self.config.max_len), predicted_ngrams
 
 def _update_ngrams_count(train, ngrams, count):

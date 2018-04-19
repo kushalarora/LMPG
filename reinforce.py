@@ -56,6 +56,10 @@ parser.add_argument('--nonlinearity', type=str, default='relu',
                     help='Non linearity for rnn.')
 parser.add_argument('--max_len', type=int, default=40,
                     help='Maximum number of words in a sentence.')
+parser.add_argument('--mc_baseline', action='store_true',
+                    help='Use Monte Carlo baseline.')
+parser.add_argument('--param_baseline', action='store_true',
+                    help='Use parametric per state baseline.')
 args = parser.parse_args()
 
 corpus = Corpus(args.data)
@@ -140,25 +144,42 @@ print('=' * 89)
 for epoch in range(args.epochs):
     epoch_start_time = time.time()
     for episode in range(args.epi_per_epoch):
-        state = env.reset()
-        cuml_reward = 0.0
-        for i in range(args.max_len):
-            action = select_action(state)
-            state, reward, done, predicted_ngrams = env.step(action)
-            policy.rewards.append(reward)
-            cuml_reward += reward
+	try:
+	    state = env.reset()
+	    cuml_reward = 0.0
+	    for i in range(args.max_len):
+		action = select_action(state)
+		state, reward, done, predicted_ngrams = env.step(action)
+		policy.rewards.append(reward)
+		cuml_reward += reward
 
-            if done:
-                break
+		if done:
+		    break
 
-        total_norm = finish_episode()
+	    total_norm = finish_episode()
 
-        print("| Episode: %d | Sent len: %d | Sent Reward: %.3f | Norm: %.3f | ngrams: %s "
-                % (episode, i, cuml_reward, total_norm,
-                    ', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
+	    print("| Episode: %d | Sent len: %d | Sent Reward: %.3f | Norm: %.3f | ngrams: %s "
+		    % (episode, i, cuml_reward, total_norm,
+			', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
 
-        if False and (episode + 1) % args.log_interval == 0:
-            print ' '.join([corpus.dictionary.idx2word[j] for j in state])
+	    if (episode + 1) % args.log_interval == 0:
+		print ' '.join([corpus.dictionary.idx2word[j] for j in state])
+
+	except KeyboardInterrupt:
+	    import pdb;pdb.set_trace()
+	    option = input("What Next: -1 for exit, 0 for break, 1 for cont")
+	    if option == -1:
+		print "Exiting"
+		sys.exit()
+	    elif option == 0:
+		print "Breaking out of DistInfKB Training"
+		break
+	    elif option == 1:
+		print "Continuing"
+		continue
+	    else:
+		print "Unknown option: " + option
+		continue
 
     val_loss = evaluate(corpus.valid)
     print('-' * 89)
