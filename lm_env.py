@@ -36,6 +36,10 @@ class LanguageModelingEnv(gym.Env):
 
     def _score_sentence(self, pred):
         score = -1.0
+        if not self.config.incl_unk_reward:
+            # Ignore <unk> token
+            pred = filter(lambda x: x != '<unk>' , pred)
+
         # Init ngrams count for pred to 0.
         count_pred = defaultdict(int)
         predicted_ngrams = []

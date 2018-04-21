@@ -1,8 +1,8 @@
 from policy_gradient import BasePolicyGradient
 
+import numpy as np
 import torch
 from torch.autograd import Variable
-from torch.distributions import Categorical
 
 
 class Reinforce(BasePolicyGradient):
@@ -10,12 +10,14 @@ class Reinforce(BasePolicyGradient):
         super(Reinforce, self).__init__(config, policy, optim)
 
     def select_action(self, state):
-        log_prob = self.policy(Variable(state)).view(-1)
+        log_prob = self.behavior_policy(Variable(state)).view(-1)
+
         probs = torch.exp(log_prob)
-        m = Categorical(probs)
-        action = m.sample()
+        action = self.sample(probs)
+
         self.saved_log_probs.append(log_prob[action])
         self.entropies.append(-1 * torch.dot(probs, log_prob))
+
         return action.data
 
     def finish_episode(self):
