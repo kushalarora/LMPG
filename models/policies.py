@@ -30,60 +30,60 @@ class LanguageBasePolicy(nn.Module):
     def forward(self, state):
 	raise NotImplementedError()
 
-    def init_hidden(self):
+    def init_hidden_state(self):
 	raise NotImplementedError()
 
     def clear(self):
-        self.init_hidden()
+        self.init_hidden_state()
 
 class FeedForwardPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
-        self.hidden = nn.Linear(self.config.context_size * self.config.embedding_size, self.config.hidden_size)
+        self.hidden_layer = nn.Linear(self.config.context_size * self.config.embedding_size, self.config.hidden_size)
 
     def forward(self, state):
 	context = state[-self.config.context_size:]
         embeds = self.encoder(context).view((1, -1))
-        out = F.relu(self.hidden(embeds))
+        out = F.relu(self.hidden_layer(embeds))
         out = self.decoder(out)
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
 
-    def init_hidden(self):
+    def init_hidden_state(self):
         pass
 
 class RNNPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
-        self.rnn = nn.RNNCell(self.config.embedding_size, self.config.hidden_size, nonlinearity=self.config.nonlinearity)
-	self.init_hidden()
+        self.hidden_layer = nn.RNNCell(self.config.embedding_size, self.config.hidden_size, nonlinearity=self.config.nonlinearity)
+	self.init_hidden_state()
 
     def forward(self, state):
         embeds = self.encoder(state[-1]).view((1, -1))
-        self.hidden = self.rnn(embeds, self.hidden)
-        out = self.decoder(self.hidden)
+        self.hidden_state = self.hidden_layer(embeds, self.hidden_state)
+        out = self.decoder(self.hidden_state)
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
 
-    def init_hidden(self):
+    def init_hidden_state(self):
         weight = next(self.parameters()).data
-	self.hidden = Variable(weight.new(self.config.hidden_size).zero_())
+	self.hidden_state = Variable(weight.new(self.config.hidden_size).zero_())
 
 
 class LSTMPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
-        self.lstm = nn.LSTMCell(self.config.embedding_size, self.config.hidden_size)
-	self.init_hidden()
+        self.hidden_layer = nn.LSTMCell(self.config.embedding_size, self.config.hidden_size)
+	self.init_hidden_state()
 
     def forward(self, state):
         embeds = self.encoder(state[-1]).view((1, -1))
-        self.hidden = self.lstm(embeds, self.hidden)
-        out = self.linear2(self.hidden[0])
+        self.hidden_state = self.hidden_layer(embeds, self.hidden_state)
+        out = self.linear2(self.hidden_state[0])
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
 
-    def init_hidden(self):
+    def init_hidden_state(self):
         weight = next(self.parameters()).data
-        self.hidden = (Variable(weight.new(self.config.hidden_size).zero_()),
-                    	Variable(weight.new(self.config.hidden_size).zero_()))
+        self.hidden_state = (Variable(weight.new(self.config.hidden_size).zero_()),
+                                Variable(weight.new(self.config.hidden_size).zero_()))
