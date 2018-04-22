@@ -178,10 +178,10 @@ def train(rank, env, valid, args, algo, episodes, seed, writer=None):
             val_loss = evaluate(valid)
             print('-' * 89)
             print('| end of episode {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'
-                        .format(episode, (time.time() - start_time), val_loss, math.exp(math.min(100, val_loss))))
+                        .format(episode, (time.time() - start_time), val_loss, math.exp(min(100, val_loss))))
             print('-' * 89)
 
-            writer.add_scalar('data/valid_ppl', math.exp(math.min(100, val_loss), episode))
+            writer.add_scalar('data/valid_ppl', math.exp(min(100, val_loss), episode))
 
 writer = SummaryWriter(args.log_dir)
 
