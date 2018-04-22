@@ -7,15 +7,16 @@ import sys
 
 from itertools import count
 
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.multiprocessing as mp
-
 from torch.autograd import Variable
 from torch.distributions import Categorical
+
+from tensorboardX import SummaryWriter
+
 from lm_env import LanguageModelingEnv
 from models.policies import FeedForwardPolicy, RNNPolicy
 from models.critics import FeedForwardCritic, RNNCritic
@@ -78,6 +79,12 @@ parser.add_argument('--min_epsilon', type=float, default=0.01,
                     help='Min epsilon value.')
 parser.add_argument('--incl_unk_reward', action='store_true',
                     help='Include <unk> word in reward.')
+parser.add_argument('--tensorboard', action='store_true',
+                    help='Log to tensorboard')
+parser.add_argument('--log_dir', type=str, default='./log/',
+                    help='Log directory for tensorboard')
+parser.add_argument('--print_sentence', action='store_true',
+                    help='Print Sentence.')
 
 args = parser.parse_args()
 
@@ -131,7 +138,7 @@ def evaluate(data_source):
         policy.clear()
     return total_loss[0] / len(data_source)
 
-def train(rank, env, valid, args, algo, episodes, seed):
+def train(rank, env, valid, args, algo, episodes, seed, writer=None):
     np.random.seed(seed)
     torch.manual_seed(seed)
     start_time = time.time()
@@ -150,12 +157,20 @@ def train(rank, env, valid, args, algo, episodes, seed):
 
         loss, total_norm = algo.finish_episode()
 
-        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | Loss: %.3f | ngrams: %s "
-                % (rank, episode, i, cuml_reward, loss,
-                    ', '.join([' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams])))
+        predicted_ngrams = [' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams]
 
-        if False and (episode + 1) % args.log_interval == 0:
-            print ' '.join([corpus.dictionary.idx2word[j] for j in state])
+        if writer is not None and args.tensorboard:
+            writer.add_scalar('data/sentence_len', i, episode)
+            writer.add_scalar('data/reward', cuml_reward, episode)
+            writer.add_text('data/ngrams', ', '.join(predicted_ngrams), episode)
+
+        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | Loss: %.3f | ngrams: %s "
+                % (rank, episode, i, cuml_reward, loss, ', '.join(predicted_ngrams)))
+
+        if args.print_sentence and (episode + 1) % args.log_interval == 0:
+            sentence =  ' '.join([corpus.dictionary.idx2word[j] for j in state])
+            print sentence
+            writer.add_text('data/sentence', sentence, episode)
 
         sys.stdout.flush()
 
@@ -163,10 +178,12 @@ def train(rank, env, valid, args, algo, episodes, seed):
             val_loss = evaluate(valid)
             print('-' * 89)
             print('| end of episode {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'
-                        .format(episode, (time.time() - start_time), val_loss, math.exp(val_loss)))
+                        .format(episode, (time.time() - start_time), val_loss, math.exp(math.min(100, val_loss))))
             print('-' * 89)
 
+            writer.add_scalar('data/valid_ppl', math.exp(math.min(100, val_loss), episode))
 
+writer = SummaryWriter(args.log_dir)
 
 if False:
 # Run on train data.
@@ -185,10 +202,12 @@ if args.parallel:
     for p in processes:
         p.join()
 else:
-    train(0, env, corpus.valid, args, algo, args.episodes, args.seed)
+    train(0, env, corpus.valid, args, algo, args.episodes, args.seed, writer)
 
 # Run on test data.
 test_loss = evaluate(corpus.test)
 print('=' * 89)
 print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(test_loss, math.exp(test_loss)))
 print('=' * 89)
+
+writer.close()
