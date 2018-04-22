@@ -6,6 +6,8 @@ import torch.optim as optim
 
 from torch.autograd import Variable
 
+from pysrilm.srilm import LM
+
 class LanguageBasePolicy(nn.Module):
     def __init__(self, config, vocab_size):
         super(LanguageBasePolicy, self).__init__()
@@ -87,3 +89,19 @@ class LSTMPolicy(LanguageBasePolicy):
         weight = next(self.parameters()).data
         self.hidden_state = (Variable(weight.new(self.config.hidden_size).zero_()),
                                 Variable(weight.new(self.config.hidden_size).zero_()))
+
+class NgramPolicy(LanguageBasePolicy):
+    def __init__(self, config, dictionary):
+        LanguageBasePolicy.__init__(self, config, len(dictionary))
+        self.lm = LM(self.config.lm_path)
+        self.dictionary = dictionary
+
+    def forward(self, state):
+        log_probs = []
+        state = [self.dictionary.idx2word[idx] for idx in reversed(state.tolist())]
+        for w in self.dictionary.idx2word:
+            log_probs.append(self.lm.logprob_strings(w, state) + 1e-10)
+        return torch.Tensor(log_probs)
+
+    def init_hidden_state(self):
+        pass

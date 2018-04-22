@@ -18,7 +18,7 @@ from torch.distributions import Categorical
 from tensorboardX import SummaryWriter
 
 from lm_env import LanguageModelingEnv
-from models.policies import FeedForwardPolicy, RNNPolicy
+from models.policies import FeedForwardPolicy, RNNPolicy, NgramPolicy
 from models.critics import FeedForwardCritic, RNNCritic
 from train.reinforce import Reinforce
 from train.actor_critic import ActorCritic
@@ -85,7 +85,8 @@ parser.add_argument('--log_dir', type=str, default='./log/',
                     help='Log directory for tensorboard')
 parser.add_argument('--print_sentence', action='store_true',
                     help='Print Sentence.')
-
+parser.add_argument('--lm_path', type=str, default='data/penn/train.arpa',
+                    help='LM path.')
 args = parser.parse_args()
 
 corpus = Corpus(args.data)
@@ -93,6 +94,8 @@ vocab_size = len(corpus.dictionary)
 
 env = LanguageModelingEnv(args, corpus.train, bos=torch.LongTensor([0]), eos=torch.LongTensor([1]))
 env.seed(args.seed)
+
+ngram_policy = NgramPolicy(args, corpus.dictionary)
 
 if args.algo == 'reinforce':
     policy = RNNPolicy(args, vocab_size)
@@ -181,9 +184,11 @@ def train(rank, env, valid, args, algo, episodes, seed, writer=None):
                         .format(episode, (time.time() - start_time), val_loss, math.exp(min(100, val_loss))))
             print('-' * 89)
 
-            writer.add_scalar('data/valid_ppl', math.exp(min(100, val_loss), episode))
+            writer.add_scalar('data/valid_ppl', math.exp(min(100, val_loss)), episode)
 
-writer = SummaryWriter(args.log_dir)
+subfolder = os.path.join(args.log_dir, "%s_%.4f_%s" % (args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M")))
+os.mkdir(subfolder)
+writer = SummaryWriter(subfolder)
 
 if False:
 # Run on train data.
