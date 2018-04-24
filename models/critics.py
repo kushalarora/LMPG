@@ -61,6 +61,8 @@ class RNNCritic(LanguageBaseCritic):
         weight = next(self.parameters()).data
 	self.hidden_state = Variable(weight.new(self.config.hidden_size).zero_())
 
+        if self.config.cuda:
+            self.hidden_state = self.hidden_state.cuda(self.config.gpuid)
 
 class LSTMCritic(LanguageBaseCritic):
     def __init__(self, config, vocab_size):
@@ -78,3 +80,7 @@ class LSTMCritic(LanguageBaseCritic):
         weight = next(self.parameters()).data
         self.hidden_state = (Variable(weight.new(self.config.hidden_size).zero_()),
                                 Variable(weight.new(self.config.hidden_size).zero_()))
+
+        if self.config.cuda:
+            self.hidden_state[0] = self.hidden_state[0].cuda(self.config.gpuid)
+            self.hidden_state[1] = self.hidden_state[1].cuda(self.config.gpuid)

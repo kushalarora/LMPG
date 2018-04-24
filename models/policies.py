@@ -61,7 +61,7 @@ class RNNPolicy(LanguageBasePolicy):
 	self.init_hidden_state()
 
     def forward(self, state):
-        embeds = self.encoder(state[-1]).view((1, -1))
+        embeds = self.encoder(state[-1])
         self.hidden_state = self.hidden_layer(embeds, self.hidden_state)
         out = self.decoder(self.hidden_state)
         log_probs = F.log_softmax(out, dim=1)
@@ -70,6 +70,9 @@ class RNNPolicy(LanguageBasePolicy):
     def init_hidden_state(self):
         weight = next(self.parameters()).data
 	self.hidden_state = Variable(weight.new(self.config.hidden_size).zero_())
+
+        if self.config.cuda:
+            self.hidden_state = self.hidden_state.cuda(self.config.gpuid)
 
 
 class LSTMPolicy(LanguageBasePolicy):
@@ -90,6 +93,10 @@ class LSTMPolicy(LanguageBasePolicy):
         self.hidden_state = (Variable(weight.new(self.config.hidden_size).zero_()),
                                 Variable(weight.new(self.config.hidden_size).zero_()))
 
+        if self.config.cuda:
+            self.hidden_state[0] = self.hidden_state[0].cuda(self.config.gpuid)
+            self.hidden_state[1] = self.hidden_state[1].cuda(self.config.gpuid)
+
 class NgramPolicy(LanguageBasePolicy):
     def __init__(self, config, dictionary):
         LanguageBasePolicy.__init__(self, config, len(dictionary))
@@ -98,10 +105,14 @@ class NgramPolicy(LanguageBasePolicy):
 
     def forward(self, state):
         log_probs = []
-        state = [self.dictionary.idx2word[idx] for idx in reversed(state.tolist())]
+        context = [self.dictionary.idx2word[idx] for idx in reversed(state.data.tolist())]
         for w in self.dictionary.idx2word:
-            log_probs.append(self.lm.logprob_strings(w, state) + 1e-10)
-        return torch.Tensor(log_probs)
+            log_probs.append(self.lm.logprob_strings(w, context))
+
+        log_prob_tensor = torch.Tensor(log_probs)
+        if self.config.cuda:
+            log_prob_tensor = log_prob_tensor.cuda(self.config.gpuid)
+        return Variable(log_prob_tensor, requires_grad=False)
 
     def init_hidden_state(self):
         pass
