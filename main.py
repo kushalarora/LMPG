@@ -94,6 +94,10 @@ parser.add_argument('--gpuid', type=int, default=0,
                     help='GPU ID.')
 parser.add_argument('--batch_size', type=int, default=1000,
                     help='Batch of trajectories before optimizing')
+parser.add_argument('--log_dir_prefix', type=str, default='log_dir_prefix',
+                    help='Prefix for log directory.')
+parser.add_argument('--sparse_rewards', action='store_true',
+                    help='Sparse Rewards.')
 args = parser.parse_args()
 
 corpus = Corpus(args.data)
@@ -227,7 +231,7 @@ def train(rank, env, train_data, valid_data, args, algo, episodes, seed, writer=
 
         predicted_ngrams = [' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams]
 
-        if writer is not None and args.tensorboard:
+        if (writer is not None) and args.tensorboard:
             writer.add_scalar('data/sentence_len', i, episode)
             writer.add_scalar('data/reward', cuml_reward, episode)
             writer.add_text('data/ngrams', ', '.join(predicted_ngrams), episode)
@@ -253,7 +257,7 @@ def train(rank, env, train_data, valid_data, args, algo, episodes, seed, writer=
             writer.add_scalar('data/train_entropy', train_loss, episode)
             writer.add_scalar('data/valid_entropy', val_loss, episode)
 
-subfolder = os.path.join(args.log_dir, "%s_%.4f_%s" % (args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M_%S")))
+subfolder = os.path.join(args.log_dir, "%s_%s_%.4f_%s" % (args.log_dir_prefix, args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M_%S")))
 os.mkdir(subfolder)
 writer = SummaryWriter(subfolder)
 
@@ -262,8 +266,8 @@ if True:
     train_loss = evaluate(train_data, policy)
     valid_loss = evaluate(valid_data, policy)
     if args.use_behav_pol:
-        # train_loss = evaluate(corpus.train, behavior_policy)
-        # valid_loss = evaluate(corpus.valid, behavior_policy)
+        train_loss = evaluate(corpus.train, behavior_policy)
+        valid_loss = evaluate(corpus.valid, behavior_policy)
         pass
     print('=' * 89)
     print('| Before training | train loss {:5.2f} | valid loss {:8.2f}'.format(valid_loss, math.exp(valid_loss)))

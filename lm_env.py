@@ -35,7 +35,7 @@ class LanguageModelingEnv(gym.Env):
        return reward, predicted_ngrams
 
     def _score_sentence(self, pred):
-        score = -1.0
+        score = 0
         if not self.config.incl_unk_reward:
             # Ignore <unk> token
             pred = filter(lambda x: x != '<unk>' , pred)
@@ -60,6 +60,9 @@ class LanguageModelingEnv(gym.Env):
                 score += (3**(len(ngram) - 1) - 1)
                 if len(ngram) > 1:
                     predicted_ngrams.append(ngram)
+
+            elif self.config.sparse_rewards:
+                return 0, predicted_ngrams
         return score + (1 - float(len_pred - 1)/self.config.max_len), predicted_ngrams
 
 def _update_ngrams_count(train, ngrams, count):
