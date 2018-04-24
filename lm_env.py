@@ -60,8 +60,6 @@ class LanguageModelingEnv(gym.Env):
                 score += (3**(len(ngram) - 1) - 1)
                 if len(ngram) > 1:
                     predicted_ngrams.append(ngram)
-
-            score -= val - 1
         return score + (1 - float(len_pred - 1)/self.config.max_len), predicted_ngrams
 
 def _update_ngrams_count(train, ngrams, count):
