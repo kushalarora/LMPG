@@ -6,19 +6,30 @@ from torch.autograd import Variable
 
 
 class Reinforce(BasePolicyGradient):
-    def __init__(self, config, policy, optim):
-        super(Reinforce, self).__init__(config, policy, optim)
+    def __init__(self, config, policy, optim, behavior_policy=None):
+        super(Reinforce, self).__init__(config, policy, optim, behavior_policy=behavior_policy)
+        self.batch_policy_loss = 0
 
     def select_action(self, state):
-        log_prob = self.behavior_policy(Variable(state)).view(-1)
-
+        action, ratio, log_prob_behav = self.sample(state)
+        log_prob = self.policy(Variable(state)).view(-1)
         probs = torch.exp(log_prob)
-        action = self.sample(probs)
 
-        self.saved_log_probs.append(log_prob[action])
+        self.saved_log_probs.append(ratio * log_prob[action])
         self.entropies.append(-1 * torch.dot(probs, log_prob))
 
         return action.data
+
+    def update_params(self):
+        self.policy_optim.zero_grad()
+
+        self.batch_policy_loss.backward()
+
+        total_policy_norm = torch.nn.utils.clip_grad_norm(self.policy.parameters(), self.config.clip)
+
+        self.policy_optim.step()
+
+        self.batch_policy_loss = 0
 
     def finish_episode(self):
         R = 0
@@ -32,14 +43,10 @@ class Reinforce(BasePolicyGradient):
         if len(rewards) > 1:
             rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
         for log_prob, entropy, reward in zip(self.saved_log_probs, self.entropies, rewards):
-            policy_loss += -log_prob * reward -  0.0001 * entropy
+            policy_loss += -log_prob * reward - 0.0001 * entropy
 
-        self.policy_optim.zero_grad()
-        policy_loss.backward()
+        self.batch_policy_loss += policy_loss
 
-        total_norm = torch.nn.utils.clip_grad_norm(self.policy.parameters(), self.config.clip)
-
-        self.policy_optim.step()
         self.clear()
         self.policy.clear()
-        return policy_loss, total_norm
+        return policy_loss

@@ -25,6 +25,7 @@ class BasePolicyGradient(object):
         self.saved_log_probs = []
         self.rewards = []
         self.entropies = []
+        self.kl_terms = []
 
     def select_action(self, state, test=False):
         raise NotImplementedError()
@@ -32,20 +33,34 @@ class BasePolicyGradient(object):
     def finish_episode(self):
         raise NotImplementedError()
 
+    def update_params(self):
+        raise NotImplementedError()
+
     def update_epsilon(self):
         self.epsilon = self.init_epsilon - float(self.current_episode) / self.config.episodes * (self.init_epsilon - self.min_epsilon)
         self.epsilon = max(self.epsilon, self.min_epsilon)
         self.current_episode += 1
 
-    def sample(self, action_values, deterministic=False):
-        if deterministic:
-            return np.argmax(action_values)
-        if np.random.rand() < self.epsilon:
-            random_action = Variable(torch.LongTensor([np.random.randint(0, len(action_values))]))
-            return random_action
+    def sample(self, state, deterministic=False):
+        state = Variable(state)
 
-        m = Categorical(action_values)
-        return m.sample()
+        log_prob_policy = self.policy(state).view(-1)
+        if np.random.rand() < self.epsilon:
+            if self.config.use_behav_pol:
+                log_prob = self.behavior_policy(state).view(-1)
+                action = Categorical(torch.exp(log_prob)).sample()
+                ratio = torch.exp(log_prob_policy[action])/torch.exp(log_prob[action])
+            else:
+                action = Variable(state.data.new([np.random.randint(0, len(log_prob_policy))]))
+                ratio = torch.exp(log_prob_policy[action])/(1.0/len(log_prob_policy))
+        else:
+            if deterministic:
+                action = np.argmax(log_prob_policy)
+            else:
+                action = Categorical(torch.exp(log_prob_policy)).sample()
+            ratio = 1
+
+        return action, ratio, log_prob_policy
 
     def train(self):
         self.policy.train()
@@ -57,8 +72,11 @@ class BasePolicyGradient(object):
         del self.saved_log_probs[:]
         del self.entropies[:]
         del self.rewards[:]
+        del self.kl_terms[:]
+
         self.saved_log_probs = []
         self.rewards = []
         self.entropies = []
+        self.kl_terms = []
 
         self.update_epsilon()
