@@ -22,6 +22,7 @@ from models.policies import FeedForwardPolicy, RNNPolicy, NgramPolicy
 from models.critics import FeedForwardCritic, RNNCritic
 from train.reinforce import Reinforce
 from train.actor_critic import ActorCritic
+from train.ppo import PPO
 from data import Corpus
 
 parser = argparse.ArgumentParser(description='PyTorch REINFORCE example')
@@ -87,28 +88,47 @@ parser.add_argument('--print_sentence', action='store_true',
                     help='Print Sentence.')
 parser.add_argument('--lm_path', type=str, default='data/penn/train.arpa',
                     help='LM path.')
+parser.add_argument('--use_behav_pol', action='store_true',
+                    help='Use Behavioral policy.')
+parser.add_argument('--gpuid', type=int, default=0,
+                    help='GPU ID.')
+parser.add_argument('--batch_size', type=int, default=1000,
+                    help='Batch of trajectories before optimizing')
 args = parser.parse_args()
 
 corpus = Corpus(args.data)
 vocab_size = len(corpus.dictionary)
 
-env = LanguageModelingEnv(args, corpus.train, bos=torch.LongTensor([0]), eos=torch.LongTensor([1]))
+bos, eos = (torch.LongTensor([0]), torch.LongTensor([1]))
+if args.cuda:
+    bos, eos = (bos.cuda(args.gpuid), eos.cuda(args.gpuid))
+
+env = LanguageModelingEnv(args, corpus.train, bos=bos, eos=eos)
 env.seed(args.seed)
 
-ngram_policy = NgramPolicy(args, corpus.dictionary)
+behavior_policy = None
+if args.use_behav_pol:
+    behavior_policy = NgramPolicy(args, corpus.dictionary)
 
 if args.algo == 'reinforce':
     policy = RNNPolicy(args, vocab_size)
+
+    if args.cuda:
+        policy = policy.cuda(args.gpuid)
 
     if args.parallel:
         policy.share_memory()
 
     optimizer = optim.Adam(policy.parameters(), lr=args.lr)
-    algo = Reinforce(args, policy, optimizer)
+    algo = Reinforce(args, policy, optimizer, behavior_policy=behavior_policy)
 
 elif args.algo == 'ac':
     policy = RNNPolicy(args, vocab_size)
     critic = RNNCritic(args, vocab_size)
+
+    if args.cuda:
+        policy = policy.cuda(args.gpuid)
+        critic = critic.cuda(args.gpuid)
 
     if args.parallel:
         policy.share_memory()
@@ -117,16 +137,55 @@ elif args.algo == 'ac':
     actor_optim = optim.Adam(policy.parameters(), lr=args.lr)
     critic_optim = optim.Adam(critic.parameters(), lr=args.lr)
 
-    algo = ActorCritic(args, policy, actor_optim, critic, critic_optim)
+    algo = ActorCritic(args, policy, actor_optim, critic, critic_optim, behavior_policy=behavior_policy)
+elif args.algo == 'ppo':
+    policy = RNNPolicy(args, vocab_size)
+    critic = RNNCritic(args, vocab_size)
+
+    if args.cuda:
+        policy = policy.cuda(args.gpuid)
+        critic = critic.cuda(args.gpuid)
+
+    actor_optim = optim.Adam(policy.parameters(), lr=args.lr)
+    critic_optim = optim.Adam(critic.parameters(), lr=args.lr)
+
+    algo = PPO(args, policy, actor_optim, critic, critic_optim, behavior_policy=behavior_policy)
 
 criterion = nn.CrossEntropyLoss()
+
+# Starting from sequential data, batchify arranges the dataset into columns.
+# For instance, with the alphabet as the sequence and batch size 4, we'd get
+# These columns are treated as independent by the model, which means that the
+# dependence of e. g. 'g' on 'f' can not be learned, but allows more efficient
+# batch processing.
+
+def batchify(data, bsz):
+    # Work out how cleanly we can divide the dataset into bsz parts.
+    nbatch = data.size(0) // bsz
+    # Trim off any extra elements that wouldn't cleanly fit (remainders).
+    data = data.narrow(0, 0, nbatch * bsz)
+    # Evenly divide the data across the bsz batches.
+    data = data.view(bsz, -1).t().contiguous()
+    if args.cuda:
+        data = data.cuda(args.gpuid)
+    return data
+
+train_data = batchify(corpus.train, 32)
+valid_data = batchify(corpus.valid, 32)
+test_data = batchify(corpus.test, 32)
+
+def cudafy(source, args):
+    if args.cuda:
+        source = source.cuda(args.gpuid)
+    return source
+
 def get_batch(source, i, evaluation=False):
     seq_len = min(args.max_len, len(source) - 1 - i)
-    data = Variable(source[i:i+seq_len], volatile=evaluation)
-    target = Variable(source[i+1:i+1+seq_len].view(-1))
+    data = Variable(cudafy(source[i:i+seq_len], args), volatile=evaluation)
+    target = Variable(cudafy(source[i+1:i+1+seq_len].view(-1), args))
     return data, target
 
-def evaluate(data_source):
+def evaluate(data_source, policy):
     # turn on evaluation mode which disables dropout.
     policy.eval()
     total_loss = 0
@@ -141,13 +200,16 @@ def evaluate(data_source):
         policy.clear()
     return total_loss[0] / len(data_source)
 
-def train(rank, env, valid, args, algo, episodes, seed, writer=None):
+def train(rank, env, train_data, valid_data, args, algo, episodes, seed, writer=None):
     np.random.seed(seed)
     torch.manual_seed(seed)
     start_time = time.time()
     algo.train()
     for episode in range(episodes):
         state = env.reset()
+
+        if args.cuda:
+            state = state.cuda(args.gpuid)
         cuml_reward = 0.0
         for i in range(args.max_len):
             action = algo.select_action(state)
@@ -158,7 +220,10 @@ def train(rank, env, valid, args, algo, episodes, seed, writer=None):
             if done:
                 break
 
-        loss, total_norm = algo.finish_episode()
+        loss = algo.finish_episode()
+
+        if episode % args.batch_size == 0:
+            algo.update_params()
 
         predicted_ngrams = [' '.join([corpus.dictionary.idx2word[j] for j in ngram]) for ngram in predicted_ngrams]
 
@@ -167,8 +232,8 @@ def train(rank, env, valid, args, algo, episodes, seed, writer=None):
             writer.add_scalar('data/reward', cuml_reward, episode)
             writer.add_text('data/ngrams', ', '.join(predicted_ngrams), episode)
 
-        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | Loss: %.3f | ngrams: %s "
-                % (rank, episode, i, cuml_reward, loss, ', '.join(predicted_ngrams)))
+        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | epsilon: %.3f | ngrams: %s "
+                % (rank, episode, i, cuml_reward, algo.epsilon, ', '.join(predicted_ngrams)))
 
         if args.print_sentence and (episode + 1) % args.log_interval == 0:
             sentence =  ' '.join([corpus.dictionary.idx2word[j] for j in state])
@@ -178,39 +243,46 @@ def train(rank, env, valid, args, algo, episodes, seed, writer=None):
         sys.stdout.flush()
 
         if (episode + 1) % args.validate_freq == 0:
-            val_loss = evaluate(valid)
+            train_loss = evaluate(train_data, policy)
+            val_loss = evaluate(valid_data, policy)
             print('-' * 89)
-            print('| end of episode {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'
-                        .format(episode, (time.time() - start_time), val_loss, math.exp(min(100, val_loss))))
+            print('| end of episode {:3d} | time: {:5.2f}s | train loss {:5.2f} | valid loss {:8.2f}'
+                        .format(episode, (time.time() - start_time), train_loss, valid_loss))
             print('-' * 89)
 
-            writer.add_scalar('data/valid_ppl', math.exp(min(100, val_loss)), episode)
+            writer.add_scalar('data/train_entropy', train_loss, episode)
+            writer.add_scalar('data/valid_entropy', val_loss, episode)
 
-subfolder = os.path.join(args.log_dir, "%s_%.4f_%s" % (args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M")))
+subfolder = os.path.join(args.log_dir, "%s_%.4f_%s" % (args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M_%S")))
 os.mkdir(subfolder)
 writer = SummaryWriter(subfolder)
 
-if False:
+if True:
 # Run on train data.
-    valid_loss = evaluate(corpus.valid)
+    train_loss = evaluate(train_data, policy)
+    valid_loss = evaluate(valid_data, policy)
+    if args.use_behav_pol:
+        # train_loss = evaluate(corpus.train, behavior_policy)
+        # valid_loss = evaluate(corpus.valid, behavior_policy)
+        pass
     print('=' * 89)
-    print('| Before training | valid loss {:5.2f} | valid ppl {:8.2f}'.format(valid_loss, math.exp(valid_loss)))
+    print('| Before training | train loss {:5.2f} | valid loss {:8.2f}'.format(valid_loss, math.exp(valid_loss)))
     print('=' * 89)
 
 if args.parallel:
     processes = []
     for rank in range(args.num_processes):
-        p = mp.Process(target=train, args=(rank, env, corpus.valid, args, algo, args.episodes, np.random.randint(0, 10000000)))
+        p = mp.Process(target=train, args=(rank, env, train_data, valid_data, args, algo, args.episodes, np.random.randint(0, 10000000)))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
 else:
-    train(0, env, corpus.valid, args, algo, args.episodes, args.seed, writer)
+    train(0, env, train_data, valid_data, args, algo, args.episodes, args.seed, writer)
 
 # Run on test data.
-test_loss = evaluate(corpus.test)
+test_loss = evaluate(test_data, policy)
 print('=' * 89)
 print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(test_loss, math.exp(test_loss)))
 print('=' * 89)
