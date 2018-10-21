@@ -11,12 +11,13 @@ class Reinforce(BasePolicyGradient):
         self.batch_policy_loss = 0
 
     def select_action(self, state):
-        action, ratio, log_prob_behav = self.sample(state)
+        action, ratio, kl_term = self.sample(state)
         log_prob = self.policy(Variable(state)).view(-1)
         probs = torch.exp(log_prob)
 
         self.saved_log_probs.append(ratio * log_prob[action])
         self.entropies.append(-1 * torch.dot(probs, log_prob))
+        self.kl_terms.append(kl_term)
 
         return action.data
 
@@ -40,12 +41,13 @@ class Reinforce(BasePolicyGradient):
             rewards.insert(0, R)
 
         rewards = torch.Tensor(rewards)
-        if len(rewards) > 1:
-            rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
+
         for log_prob, entropy, reward in zip(self.saved_log_probs, self.entropies, rewards):
-            policy_loss += -log_prob * reward - 0.0001 * entropy
+            policy_loss += -log_prob * reward
+
 
         self.batch_policy_loss += policy_loss
+        self.batch_policy_loss += self.config.kl_term * sum(self.kl_terms)
 
         self.clear()
         self.policy.clear()

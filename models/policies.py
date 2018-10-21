@@ -78,24 +78,43 @@ class RNNPolicy(LanguageBasePolicy):
 class LSTMPolicy(LanguageBasePolicy):
     def __init__(self, config, vocab_size):
    	LanguageBasePolicy.__init__(self, config, vocab_size)
-        self.hidden_layer = nn.LSTMCell(self.config.embedding_size, self.config.hidden_size)
+        self.hidden_layer = nn.GRUCell(self.config.embedding_size, self.config.hidden_size)
 	self.init_hidden_state()
 
     def forward(self, state):
-        embeds = self.encoder(state[-1]).view((1, -1))
+        import pdb;pdb.set_trace()
+        embeds = self.encoder(state[-1])
         self.hidden_state = self.hidden_layer(embeds, self.hidden_state)
-        out = self.linear2(self.hidden_state[0])
+        out = self.decoder(self.hidden_state)
         log_probs = F.log_softmax(out, dim=1)
         return log_probs
 
+    # def forward(self, state):
+        # import pdb;pdb.set_trace()
+        # embeds = self.encoder(state[-1])
+        # self.hidden_state = self.hidden_layer(embeds, self.hidden_state)
+        # out = self.decoder(self.hidden_state[0])
+        # log_probs = F.log_softmax(out, dim=1)
+        # return log_probs
+
+    # def init_hidden_state(self):
+
+        # weight = next(self.parameters()).data
+        # h0, c0 = (Variable(weight.new(self.config.hidden_size).zero_()),
+                                # Variable(weight.new(self.config.hidden_size).zero_()))
+
+        # if self.config.cuda:
+            # h0 = h0.cuda(self.config.gpuid)
+            # c0 = c0.cuda(self.config.gpuid)
+
+        # self.hidden_state = (h0, c0)
+
     def init_hidden_state(self):
         weight = next(self.parameters()).data
-        self.hidden_state = (Variable(weight.new(self.config.hidden_size).zero_()),
-                                Variable(weight.new(self.config.hidden_size).zero_()))
+	self.hidden_state = Variable(weight.new(self.config.hidden_size).zero_())
 
         if self.config.cuda:
-            self.hidden_state[0] = self.hidden_state[0].cuda(self.config.gpuid)
-            self.hidden_state[1] = self.hidden_state[1].cuda(self.config.gpuid)
+            self.hidden_state = self.hidden_state.cuda(self.config.gpuid)
 
 class NgramPolicy(LanguageBasePolicy):
     def __init__(self, config, dictionary):
@@ -113,6 +132,22 @@ class NgramPolicy(LanguageBasePolicy):
         if self.config.cuda:
             log_prob_tensor = log_prob_tensor.cuda(self.config.gpuid)
         return Variable(log_prob_tensor, requires_grad=False)
+
+    def init_hidden_state(self):
+        pass
+
+class DistributedBasePolicy(LanguageBasePolicy):
+    def __init__(self, config, dictionary):
+        LanguageBasePolicy.__init__(self, config, len(dictionary))
+        self.lm = torch.load(self.config.lm_path)
+        if self.config.cuda:
+            self.lm = self.lm.cuda(self.config.gpuid)
+        self.lm.eval()
+
+    def forward(self, state):
+        hidden = self.lm.init_hidden(state.shape[1])
+        output, hidden = self.lm(state, hidden)
+        return F.log_softmax(Variable(output[-1].data, requires_grad=False), dim=1)
 
     def init_hidden_state(self):
         pass

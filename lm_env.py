@@ -30,7 +30,7 @@ class LanguageModelingEnv(gym.Env):
 
     def _reward(self, state, action):
        current_score, predicted_ngrams = self._score_sentence(torch.cat([state, action]))
-       reward = current_score - self.last_score
+       reward = current_score - self.last_score # current_score/len(state) - self.last_score/max((len(state) - 1), 1)
        self.last_score = current_score
        return reward, predicted_ngrams
 
@@ -63,7 +63,7 @@ class LanguageModelingEnv(gym.Env):
 
             elif self.config.sparse_rewards:
                 return 0, predicted_ngrams
-        return score + (1 - float(len_pred - 1)/self.config.max_len), predicted_ngrams
+        return score, predicted_ngrams
 
 def _update_ngrams_count(train, ngrams, count):
     length = len(train)

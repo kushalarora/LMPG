@@ -7,25 +7,21 @@ from torch.distributions import Categorical
 import torch.nn.functional as F
 
 
-class ActorCritic(BasePolicyGradient):
+class PPO(BasePolicyGradient):
     def __init__(self, config, actor, actor_optim, critic, critic_optim, behavior_policy=None):
-        super(ActorCritic, self).__init__(config, actor, actor_optim, critic, critic_optim, behavior_policy=behavior_policy)
+        super(PPO, self).__init__(config, actor, actor_optim, critic, critic_optim, behavior_policy=behavior_policy)
         self.values = []
 
-        self.batch_policy_loss = 0
-        self.batch_value_loss = 0
-
     def select_action(self, state):
-        action, ratio, kl_term = self.sample(state)
-        log_prob = self.policy(Variable(state)).view(-1)
+        log_prob = self.behavior_policy(Variable(state)).view(-1)
         value = self.critic(Variable(state)).view(-1)
 
         probs = torch.exp(log_prob)
+        action = self.sample(probs) 
 
-        self.saved_log_probs.append(ratio * log_prob[action])
+        self.saved_log_probs.append(log_prob[action])
         self.values.append(value)
         self.entropies.append(-1 * torch.dot(probs, log_prob))
-        self.kl_terms.append(kl_term)
 
         return action.data
 
@@ -46,30 +42,13 @@ class ActorCritic(BasePolicyGradient):
         for log_prob, value, entropy, r in zip(self.saved_log_probs, self.values, self.entropies,  rewards):
             reward = r - value.data[0]
             policy_loss += -log_prob * reward - 0.0001 * entropy
-            r = torch.Tensor([r])
-            if self.config.cuda:
-                r = r.cuda(self.config.gpuid)
-            value_loss += F.smooth_l1_loss(value, Variable(r))
+            value_loss += F.smooth_l1_loss(value, Variable(torch.Tensor([r])))
 
-        self.batch_policy_loss += policy_loss
-        self.batch_value_loss += value_loss
-        self.batch_policy_loss += self.config.kl_term * sum(self.kl_terms)
-
-        self.clear()
-        self.policy.clear()
-        self.critic.clear()
-
-        del self.values[:]
-        self.values = []
-
-        return policy_loss + value_loss
-
-    def update_params(self):
         self.policy_optim.zero_grad()
         self.critic_optim.zero_grad()
 
-        self.batch_policy_loss.backward()
-        self.batch_value_loss.backward()
+        policy_loss.backward()
+        value_loss.backward()
 
         total_policy_norm = torch.nn.utils.clip_grad_norm(self.policy.parameters(), self.config.clip)
         total_value_norm = torch.nn.utils.clip_grad_norm(self.critic.parameters(), self.config.clip)
@@ -77,6 +56,10 @@ class ActorCritic(BasePolicyGradient):
         self.policy_optim.step()
         self.critic_optim.step()
 
-        self.batch_policy_loss = 0
-        self.batch_value_loss = 0
+        self.clear()
+        self.policy.clear()
+        self.critic.clear()
+        del self.values[:]
+        self.values = []
 
+        return policy_loss.data[0] + value_loss.data[0], total_policy_norm + total_value_norm

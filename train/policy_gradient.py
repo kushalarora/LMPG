@@ -1,4 +1,5 @@
 from torch.autograd import Variable
+import torch.nn.functional as F
 from torch.distributions import Categorical
 import numpy as np
 import torch
@@ -47,20 +48,24 @@ class BasePolicyGradient(object):
         log_prob_policy = self.policy(state).view(-1)
         if np.random.rand() < self.epsilon:
             if self.config.use_behav_pol:
-                log_prob = self.behavior_policy(state).view(-1)
+                log_prob = self.behavior_policy(state.unsqueeze(1)).view(-1)
                 action = Categorical(torch.exp(log_prob)).sample()
                 ratio = torch.exp(log_prob_policy[action])/torch.exp(log_prob[action])
+                log_prob_behav = log_prob
             else:
                 action = Variable(state.data.new([np.random.randint(0, len(log_prob_policy))]))
-                ratio = torch.exp(log_prob_policy[action])/(1.0/len(log_prob_policy))
+                len_actions = len(log_prob_policy)
+                ratio = torch.exp(log_prob_policy[action])/(1.0/len_actions)
+                log_prob_behav = Variable(log_prob_policy.data.new([1.0/len_actions] * len_actions), requires_grad=False)
+            kl_term = F.kl_div(log_prob_policy, log_prob_behav)
         else:
             if deterministic:
                 action = np.argmax(log_prob_policy)
             else:
                 action = Categorical(torch.exp(log_prob_policy)).sample()
             ratio = 1
-
-        return action, ratio, log_prob_policy
+            kl_term = 0
+        return action, ratio, kl_term
 
     def train(self):
         self.policy.train()

@@ -18,7 +18,7 @@ from torch.distributions import Categorical
 from tensorboardX import SummaryWriter
 
 from lm_env import LanguageModelingEnv
-from models.policies import FeedForwardPolicy, RNNPolicy, NgramPolicy
+from models.policies import FeedForwardPolicy, RNNPolicy, NgramPolicy, DistributedBasePolicy, LSTMPolicy
 from models.critics import FeedForwardCritic, RNNCritic
 from train.reinforce import Reinforce
 from train.actor_critic import ActorCritic
@@ -98,6 +98,8 @@ parser.add_argument('--log_dir_prefix', type=str, default='log_dir_prefix',
                     help='Prefix for log directory.')
 parser.add_argument('--sparse_rewards', action='store_true',
                     help='Sparse Rewards.')
+parser.add_argument('--kl_term', type=float, default=0.0,
+                    help='KL_term')
 args = parser.parse_args()
 
 corpus = Corpus(args.data)
@@ -112,7 +114,7 @@ env.seed(args.seed)
 
 behavior_policy = None
 if args.use_behav_pol:
-    behavior_policy = NgramPolicy(args, corpus.dictionary)
+    behavior_policy = DistributedBasePolicy(args, corpus.dictionary)# NgramPolicy(args, corpus.dictionary)
 
 if args.algo == 'reinforce':
     policy = RNNPolicy(args, vocab_size)
@@ -129,6 +131,9 @@ if args.algo == 'reinforce':
 elif args.algo == 'ac':
     policy = RNNPolicy(args, vocab_size)
     critic = RNNCritic(args, vocab_size)
+
+    policy.encoder = critic.encoder
+    policy.hidden_layer = critic.hidden_layer
 
     if args.cuda:
         policy = policy.cuda(args.gpuid)
@@ -236,13 +241,13 @@ def train(rank, env, train_data, valid_data, args, algo, episodes, seed, writer=
             writer.add_scalar('data/reward', cuml_reward, episode)
             writer.add_text('data/ngrams', ', '.join(predicted_ngrams), episode)
 
-        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | epsilon: %.3f | ngrams: %s "
-                % (rank, episode, i, cuml_reward, algo.epsilon, ', '.join(predicted_ngrams)))
+        print("Rank: %d | Episode: %d | Sent len: %d | Sent Reward: %.3f | loss: %.3f | ngrams: %s "
+                % (rank, episode, i, cuml_reward, loss, ', '.join(predicted_ngrams)))
 
-        if args.print_sentence and (episode + 1) % args.log_interval == 0:
-            sentence =  ' '.join([corpus.dictionary.idx2word[j] for j in state])
-            print sentence
-            writer.add_text('data/sentence', sentence, episode)
+        if args.print_sentence:
+            with open('generated.txt', 'a')  as f:
+                sentence =  ' '.join([corpus.dictionary.idx2word[j] for j in state])
+                f.write('%s\n' % sentence)
 
         sys.stdout.flush()
 
@@ -251,27 +256,34 @@ def train(rank, env, train_data, valid_data, args, algo, episodes, seed, writer=
             val_loss = evaluate(valid_data, policy)
             print('-' * 89)
             print('| end of episode {:3d} | time: {:5.2f}s | train loss {:5.2f} | valid loss {:8.2f}'
-                        .format(episode, (time.time() - start_time), train_loss, valid_loss))
+                        .format(episode, (time.time() - start_time), train_loss, val_loss))
             print('-' * 89)
 
-            writer.add_scalar('data/train_entropy', train_loss, episode)
-            writer.add_scalar('data/valid_entropy', val_loss, episode)
+            if (writer is not None) and args.tensorboard:
+                writer.add_scalar('data/train_entropy', train_loss, episode)
+                writer.add_scalar('data/valid_entropy', val_loss, episode)
 
-subfolder = os.path.join(args.log_dir, "%s_%s_%.4f_%s" % (args.log_dir_prefix, args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M_%S")))
-os.mkdir(subfolder)
-writer = SummaryWriter(subfolder)
+writer = None
+if args.tensorboard:
+    subfolder = os.path.join(args.log_dir,
+                    "%s_%s_%.4f_%s" % (args.log_dir_prefix, args.algo, args.lr, time.strftime("%Y_%m_%d_%H_%M_%S")))
+    os.mkdir(subfolder)
+    writer = SummaryWriter(subfolder)
 
 if True:
 # Run on train data.
     train_loss = evaluate(train_data, policy)
     valid_loss = evaluate(valid_data, policy)
+    print('=' * 89)
+    print('| Before training | train loss {:5.2f} | valid loss {:5.2f}'.format(train_loss, valid_loss))
+    print('=' * 89)
+
     if args.use_behav_pol:
-        train_loss = evaluate(corpus.train, behavior_policy)
-        valid_loss = evaluate(corpus.valid, behavior_policy)
-        pass
-    print('=' * 89)
-    print('| Before training | train loss {:5.2f} | valid loss {:8.2f}'.format(valid_loss, math.exp(valid_loss)))
-    print('=' * 89)
+        behav_train_loss = evaluate(train_data, behavior_policy)
+        behav_valid_loss = evaluate(valid_data, behavior_policy)
+        print('=' * 89)
+        print('| Before training | behav train loss {:5.2f} | behav valid loss {:8.2f}'.format(behav_train_loss, behav_valid_loss))
+        print('=' * 89)
 
 if args.parallel:
     processes = []
